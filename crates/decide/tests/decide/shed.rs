@@ -450,3 +450,46 @@ fn degenerate_telemetry_never_panics() {
         }
     }
 }
+
+#[test]
+fn detail_text_matches_the_go_gateway() {
+    let refusal = |r: &Request, s: &Snap<'_>| match should_shed(r, s) {
+        Verdict::Shed(refusal) => refusal.detail,
+        Verdict::Admit => panic!("admitted"),
+    };
+    let r = request(Priority::Batch, after(30));
+    let worker = WorkerView {
+        kv_pool_tokens: 10000,
+        kv_usage: 0.81,
+        in_flight: 16,
+        queued: 1000,
+        max_inflight: 16,
+        mean_service_s: 1e9,
+        ..WorkerView::default()
+    };
+
+    let tenant = Snap {
+        tenant: TenantState {
+            available_tokens: 1000.5,
+            rate_per_s: f64::INFINITY,
+        },
+        est_tokens: 1001,
+        ..snap(&worker)
+    };
+    assert_eq!(
+        refusal(&r, &tenant),
+        "need 1001 tokens, tenant has 1000.5 available at +Inf/s"
+    );
+    assert_eq!(
+        refusal(&r, &snap(&worker)),
+        "free ratio 0.19 below line 0.19999999999999996"
+    );
+    let resident = Snap {
+        resident: true,
+        ..snap(&worker)
+    };
+    assert_eq!(
+        refusal(&r, &resident),
+        "projected wait 9223372036.854776s past deadline, 16/16 in flight"
+    );
+}

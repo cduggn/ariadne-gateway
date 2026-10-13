@@ -246,7 +246,10 @@ fn timeout_queue(r: &Request, s: &Snap<'_>) -> Option<Refusal> {
     let w = s.worker;
     let wait = if w.in_flight >= w.max_inflight && w.mean_service_s > 0.0 {
         let ahead_of = w.queued as f64 + 1.0;
-        Duration::from_nanos((ahead_of * w.mean_service_s * 1e9) as u64)
+        // Saturates at i64::MAX nanoseconds, the range of the Go gateway's time.Duration, so the
+        // detail text matches for an absurd service time.
+        let nanos = (ahead_of * w.mean_service_s * 1e9) as i64;
+        Duration::from_nanos(nanos.unsigned_abs())
     } else {
         Duration::ZERO
     };
