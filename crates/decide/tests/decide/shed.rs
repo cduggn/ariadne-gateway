@@ -396,3 +396,57 @@ fn estimate_tokens_cases() {
         assert_eq!(estimate_tokens(&req, prior.as_ref()), want, "{name}");
     }
 }
+
+#[test]
+fn degenerate_telemetry_never_panics() {
+    let r = request(Priority::Batch, after(30));
+    let views = [
+        WorkerView::default(),
+        WorkerView {
+            kv_pool_tokens: u64::MAX,
+            kv_usage: f64::NAN,
+            reserved_tokens: u64::MAX,
+            in_flight: usize::MAX,
+            queued: usize::MAX,
+            max_inflight: 0,
+            mean_service_s: f64::INFINITY,
+            ttft_p50_s: f64::NAN,
+            ttft_p99_s: f64::INFINITY,
+            waiting_rising: true,
+            ..WorkerView::default()
+        },
+        WorkerView {
+            kv_pool_tokens: 1,
+            kv_usage: -1e300,
+            in_flight: 1,
+            mean_service_s: 1e300,
+            ..WorkerView::default()
+        },
+    ];
+    let tenants = [
+        AMPLE_TENANT,
+        TenantState {
+            available_tokens: f64::NEG_INFINITY,
+            rate_per_s: f64::INFINITY,
+        },
+        TenantState {
+            available_tokens: f64::NAN,
+            rate_per_s: f64::NAN,
+        },
+    ];
+    for worker in &views {
+        let _ = (worker.free_tokens(), worker.free_ratio(), worker.load());
+        let _ = worker.load_without(u64::MAX);
+        for tenant in tenants {
+            for est_tokens in [0, u64::MAX] {
+                let s = Snap {
+                    tenant,
+                    est_tokens,
+                    resident: est_tokens == 0,
+                    ..snap(worker)
+                };
+                let _ = should_shed(&r, &s);
+            }
+        }
+    }
+}

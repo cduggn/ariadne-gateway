@@ -109,6 +109,10 @@ pub struct Headers<'a> {
 /// Output token ceiling for a request that sets neither `max_completion_tokens` nor `max_tokens`.
 pub const DEFAULT_MAX_OUT: u64 = 768;
 
+/// `inspect` caps `max_out` here, so every later sum of token counts fits in a `u64`. A request
+/// asking for more still passes the guard and is refused downstream as `tenant_tokens`.
+pub const MAX_OUT_CEILING: u64 = 1 << 32;
+
 /// The largest doctor context is roughly 100 KiB, so 1 MiB leaves ample headroom.
 pub const DEFAULT_MAX_BODY: usize = 1 << 20;
 
@@ -124,12 +128,13 @@ pub struct Request {
     pub step: u64,
     /// Sanitised `X-Tenant`, default "platform".
     pub tenant: String,
-    /// `X-App`, for labels only.
+    /// `X-App` under the tenant's filter, for labels only. Empty when nothing survives.
     pub app: String,
     pub priority: Priority,
     pub class: DataClass,
     pub body_bytes: usize,
-    /// `max_completion_tokens`, else `max_tokens`, else `DEFAULT_MAX_OUT`.
+    /// `max_completion_tokens`, else `max_tokens`, else `DEFAULT_MAX_OUT`; at most
+    /// `MAX_OUT_CEILING`.
     pub max_out: u64,
     pub arrived: Timestamp,
     /// `arrived` plus the per-priority queue budget.
@@ -195,9 +200,9 @@ fn reject(reason: RejectReason, detail: impl Into<String>) -> Reject {
 }
 
 /// Validates a raw request body and headers. It checks, in order, the body size, that the body
-/// is a JSON object, a non-empty `messages` array, a non-empty `model`, that `stream` is not
-/// set, that the client did not set `kv_transfer_params`, and the output token limit. Headers
-/// never cause a reject.
+/// is a JSON object, a non-empty `messages` array, a non-empty `model`, that `stream` is absent,
+/// `null` or `false`, that the client did not set `kv_transfer_params`, and the output token
+/// limit. Headers never cause a reject.
 pub fn inspect(
     body: &[u8],
     h: Headers<'_>,
@@ -236,7 +241,12 @@ pub fn inspect(
         return Err(reject(NoModel, "model must be a non-empty string"));
     }
 
-    if obj.get("stream").and_then(Value::as_bool) == Some(true) {
+    // The worker parses the body with pydantic, which coerces 1, "true", "yes", "on" and the like
+    // to true. Refusing only a JSON `true` would let those through to a worker that then streams.
+    if !matches!(
+        obj.get("stream"),
+        None | Some(Value::Null | Value::Bool(false))
+    ) {
         return Err(reject(
             StreamUnsupported,
             "stream is not supported; the gateway serves non-streaming only",
@@ -260,7 +270,8 @@ pub fn inspect(
     let max_out = match limit {
         None => DEFAULT_MAX_OUT,
         Some((key, v)) => positive_int(v)
-            .ok_or_else(|| reject(BadMaxTokens, format!("{key} must be a positive integer")))?,
+            .ok_or_else(|| reject(BadMaxTokens, format!("{key} must be a positive integer")))?
+            .min(MAX_OUT_CEILING),
     };
 
     let (run, step) = match parse_request_id(h.request_id) {
@@ -277,8 +288,10 @@ pub fn inspect(
         id: h.request_id.to_owned(),
         run,
         step,
-        tenant: sanitize_tenant(h.tenant),
-        app: h.app.to_owned(),
+        tenant: Some(label_safe(h.tenant))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "platform".to_owned()),
+        app: label_safe(h.app),
         priority,
         class: parse_data_class(h.data_class),
         body_bytes: body.len(),
@@ -294,19 +307,13 @@ fn positive_int(v: &Value) -> Option<u64> {
     (f > 0.0 && f == f.trunc()).then_some(f as u64)
 }
 
-/// Lowercases `raw`, keeps only `[a-z0-9._-]`, and caps the result at 64 characters. Empty
-/// input, or input with nothing left after filtering, becomes "platform".
-fn sanitize_tenant(raw: &str) -> String {
-    let kept: String = raw
-        .trim()
+/// Lowercases `raw`, keeps only `[a-z0-9._-]`, and caps the result at 64 characters, so a client
+/// string is safe to use as a metric label.
+fn label_safe(raw: &str) -> String {
+    raw.trim()
         .chars()
         .flat_map(char::to_lowercase)
         .filter(|c| matches!(c, 'a'..='z' | '0'..='9' | '.' | '_' | '-'))
         .take(64)
-        .collect();
-    if kept.is_empty() {
-        "platform".to_owned()
-    } else {
-        kept
-    }
+        .collect()
 }

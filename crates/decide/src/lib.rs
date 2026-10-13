@@ -14,9 +14,9 @@ pub use pick::{
     Sticky, WorkerState, parse_pick_policy, pick,
 };
 pub use request::{
-    Budgets, DEFAULT_BUDGETS, DEFAULT_MAX_BODY, DEFAULT_MAX_OUT, DataClass, Headers, Priority,
-    Reject, RejectReason, Request, RunId, inspect, parse_data_class, parse_priority,
-    parse_request_id,
+    Budgets, DEFAULT_BUDGETS, DEFAULT_MAX_BODY, DEFAULT_MAX_OUT, DataClass, Headers,
+    MAX_OUT_CEILING, Priority, Reject, RejectReason, Request, RunId, inspect, parse_data_class,
+    parse_priority, parse_request_id,
 };
 pub use shed::{
     DEFAULT_POLICY, Policy, Reason, Refusal, RunUsage, Snap, TenantState, Verdict, WorkerView,

@@ -1,9 +1,24 @@
 use ariadne_decide::{
-    DEFAULT_BUDGETS, DEFAULT_MAX_BODY, DataClass, Headers, Priority, Reject, RejectReason, RunId,
-    inspect, parse_data_class, parse_priority, parse_request_id,
+    DEFAULT_BUDGETS, DEFAULT_MAX_BODY, DEFAULT_POLICY, DataClass, Headers, MAX_OUT_CEILING,
+    Priority, Reason, Reject, RejectReason, Request, RunId, RunUsage, Snap, Verdict, WorkerView,
+    estimate_tokens, inspect, parse_data_class, parse_priority, parse_request_id, should_shed,
 };
 
-use crate::{DOCTOR_BODY, FIXED_NOW, after};
+use crate::{AMPLE_TENANT, DOCTOR_BODY, FIXED_NOW, after};
+
+fn inspect_body(body: &str) -> Result<Request, Reject> {
+    inspect(
+        body.as_bytes(),
+        Headers::default(),
+        FIXED_NOW,
+        DEFAULT_BUDGETS,
+        DEFAULT_MAX_BODY,
+    )
+}
+
+fn chat(extra: &str) -> String {
+    format!(r#"{{"model":"m","messages":[{{"role":"user","content":"hi"}}]{extra}}}"#)
+}
 
 #[test]
 fn parse_request_id_cases() {
@@ -273,5 +288,135 @@ fn inspect_tenant_sanitizing() {
         let got = inspect(body, headers, FIXED_NOW, DEFAULT_BUDGETS, DEFAULT_MAX_BODY)
             .expect("a valid request passes the guard");
         assert_eq!(got.tenant, want, "{name}");
+    }
+}
+
+#[test]
+fn inspect_refuses_every_stream_value_a_worker_could_read_as_true() {
+    let refused = [
+        "true",
+        "1",
+        "0",
+        "1.0",
+        r#""true""#,
+        r#""yes""#,
+        r#""on""#,
+        r#""false""#,
+        r#""""#,
+        "[]",
+        "{}",
+    ];
+    for value in refused {
+        let got = inspect_body(&chat(&format!(r#","stream":{value}"#))).expect_err(value);
+        assert_eq!(
+            got.reason,
+            RejectReason::StreamUnsupported,
+            "stream: {value}"
+        );
+        assert_eq!(
+            got.detail,
+            "stream is not supported; the gateway serves non-streaming only"
+        );
+    }
+    for value in ["false", "null"] {
+        assert!(
+            inspect_body(&chat(&format!(r#","stream":{value}"#))).is_ok(),
+            "stream: {value}"
+        );
+    }
+    assert!(inspect_body(&chat("")).is_ok(), "stream absent");
+}
+
+#[test]
+fn inspect_caps_max_out_and_the_tenant_gate_refuses_it() {
+    let cases = [
+        (r#","max_completion_tokens":10000000"#, 10_000_000),
+        (r#","max_tokens":4294967296"#, MAX_OUT_CEILING),
+        (r#","max_tokens":4294967297"#, MAX_OUT_CEILING),
+        (
+            r#","max_completion_tokens":18446744073709551615"#,
+            MAX_OUT_CEILING,
+        ),
+        (r#","max_completion_tokens":1e30"#, MAX_OUT_CEILING),
+        (r#","max_completion_tokens":1e308"#, MAX_OUT_CEILING),
+    ];
+    assert_eq!(MAX_OUT_CEILING, 1 << 32);
+    let worker = WorkerView {
+        kv_pool_tokens: 10000,
+        kv_usage: 0.1,
+        max_inflight: 16,
+        ..WorkerView::default()
+    };
+    for (extra, want_max_out) in cases {
+        let req = inspect_body(&chat(extra)).expect(extra);
+        assert_eq!(req.max_out, want_max_out, "{extra}");
+
+        let est_tokens = estimate_tokens(&req, None);
+        assert!(est_tokens > want_max_out, "{extra}: estimate {est_tokens}");
+        let snap = Snap {
+            now: FIXED_NOW,
+            tenant: AMPLE_TENANT,
+            worker: &worker,
+            resident: false,
+            est_tokens,
+            policy: DEFAULT_POLICY,
+        };
+        let Verdict::Shed(refusal) = should_shed(&req, &snap) else {
+            panic!("{extra}: admitted");
+        };
+        assert_eq!(
+            (refusal.code(), refusal.reason),
+            (429, Reason::TenantTokens),
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn estimate_tokens_saturates_on_absurd_usage() {
+    let req = Request {
+        body_bytes: usize::MAX,
+        ..inspect_body(&chat(r#","max_tokens":1e30"#)).expect("passes the guard")
+    };
+    let prior = RunUsage {
+        prompt_tokens: u64::MAX,
+        completion_tokens: u64::MAX,
+        body_bytes: 0,
+    };
+    assert_eq!(estimate_tokens(&req, Some(&prior)), u64::MAX);
+}
+
+#[test]
+fn inspect_sanitizes_app_like_tenant() {
+    let long_raw = "A".repeat(100);
+    let want_long = "a".repeat(64);
+    let cases = [
+        ("plain", "doctor", "doctor"),
+        ("mixed case lowered", " Doctor-V2 ", "doctor-v2"),
+        ("label injection stripped", "doctor\",pod=\"x", "doctorpodx"),
+        ("newline stripped", "a\nb", "ab"),
+        ("empty stays empty", "", ""),
+        ("nothing survives stays empty", "!!!", ""),
+        (
+            "truncated to 64 chars",
+            long_raw.as_str(),
+            want_long.as_str(),
+        ),
+    ];
+    for (name, raw, want) in cases {
+        let headers = Headers {
+            app: raw,
+            ..Headers::default()
+        };
+        let got = inspect(
+            chat("").as_bytes(),
+            headers,
+            FIXED_NOW,
+            DEFAULT_BUDGETS,
+            DEFAULT_MAX_BODY,
+        )
+        .expect("a valid request passes the guard");
+        assert_eq!(got.app, want, "{name}");
+        assert_eq!(got.tenant, "platform", "{name}");
     }
 }
