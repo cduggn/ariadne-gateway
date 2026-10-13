@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ariadne_decide::{DataClass, Priority, Request, TenantState, Timestamp};
 
+mod overflow;
 mod pick;
 mod request;
 mod shed;

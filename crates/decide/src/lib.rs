@@ -2,11 +2,13 @@
 //! randomness in. The crate depends only on serde and serde_json, so purity is a property of the
 //! build and does not depend on review.
 
+mod overflow;
 mod pick;
 mod request;
 mod shed;
 mod time;
 
+pub use overflow::{OVERFLOW_BLOCKED, OVERFLOW_NO_BACKEND, Offboxable, may_leave, overflow_result};
 pub use pick::{
     DEFAULT_STALENESS, DEFAULT_STICK_SLACK, Fleet, PickPolicy, Placed, Placement, Staleness,
     Sticky, WorkerState, parse_pick_policy, pick,
