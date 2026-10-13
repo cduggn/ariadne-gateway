@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["crates/decide", "crates/gateway"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+repository = "https://github.com/cduggn/ariadne-gateway"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
