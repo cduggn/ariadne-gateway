@@ -2,10 +2,15 @@
 //! randomness in. The crate depends only on serde and serde_json, so purity is a property of the
 //! build and does not depend on review.
 
+mod pick;
 mod request;
 mod shed;
 mod time;
 
+pub use pick::{
+    DEFAULT_STALENESS, DEFAULT_STICK_SLACK, Fleet, PickPolicy, Placed, Placement, Staleness,
+    Sticky, WorkerState, parse_pick_policy, pick,
+};
 pub use request::{
     Budgets, DEFAULT_BUDGETS, DEFAULT_MAX_BODY, DEFAULT_MAX_OUT, DataClass, Headers, Priority,
     Reject, RejectReason, Request, RunId, inspect, parse_data_class, parse_priority,
