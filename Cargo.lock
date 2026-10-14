@@ -88,6 +88,8 @@ dependencies = [
  "flate2",
  "http",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "proptest",
  "rand",
  "reqwest",

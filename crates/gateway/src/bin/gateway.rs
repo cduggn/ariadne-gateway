@@ -7,7 +7,6 @@
 //! Go's error text and usage listing.
 
 use std::collections::{BTreeMap, HashMap};
-use std::future::IntoFuture;
 use std::io::Read;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -305,10 +304,7 @@ async fn run(s: Settings) -> Result<(), Fatal> {
     let listener = listen(&s.listen)
         .await
         .map_err(|e| format!("serve: listen tcp {}: {e}", s.listen))?;
-    let served = axum::serve(listener, router)
-        .with_graceful_shutdown(stop.clone().cancelled_owned())
-        .into_future();
-    let mut served = tokio::spawn(served);
+    let mut served = tokio::spawn(serve_http(listener, router, stop.clone()));
     tokio::select! {
         r = &mut served => {
             if let Ok(Err(e)) = r {
@@ -326,6 +322,50 @@ async fn run(s: Settings) -> Result<(), Fatal> {
     let _ = fleet_done.await;
     let _ = overflow_done.await;
     log.info("gateway stopped", &[]);
+    Ok(())
+}
+
+/// Go's `http.Server{ReadHeaderTimeout: 10 * time.Second}`: a client that never finishes its
+/// request headers is cut off instead of holding a connection forever.
+const READ_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serves `router` over HTTP/1.1 until `stop`, then waits for open connections to finish. It
+/// replaces `axum::serve`, which has no header read timeout.
+async fn serve_http(
+    listener: TcpListener,
+    router: axum::Router,
+    stop: CancellationToken,
+) -> std::io::Result<()> {
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    use hyper_util::server::graceful::GracefulShutdown;
+    use hyper_util::service::TowerToHyperService;
+
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.timer(TokioTimer::new())
+        .header_read_timeout(READ_HEADER_TIMEOUT);
+    let graceful = GracefulShutdown::new();
+    loop {
+        let stream = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => stream,
+                // Out of file descriptors and the like: back off, as axum::serve does.
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            },
+            () = stop.cancelled() => break,
+        };
+        let conn = http.serve_connection(
+            TokioIo::new(stream),
+            TowerToHyperService::new(router.clone()),
+        );
+        let conn = graceful.watch(conn);
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+    }
+    graceful.shutdown().await;
     Ok(())
 }
 
