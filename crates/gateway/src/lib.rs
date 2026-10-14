@@ -3,6 +3,7 @@ pub mod fake;
 pub mod fleet;
 pub mod goduration;
 pub mod hop;
+pub mod log;
 pub mod metrics;
 pub mod overflow;
 pub mod serve;
