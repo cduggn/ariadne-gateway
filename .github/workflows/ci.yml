@@ -1,0 +1,33 @@
+# Every push and PR: format, lint and tests, then the parity run against the Go gateway this port replaces.
+# Actions are pinned by commit SHA. No secrets, no network beyond toolchain and crate downloads.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  ARIADNE_COMMIT: 12204502aa0eb0e68bc97f14d0e720a0e5c2ed19   # the Go gateway the parity run compares against
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - run: rustup toolchain install 1.98 --profile minimal --component rustfmt,clippy && rustup default 1.98
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: {repository: cduggn/Ariadne, ref: "${{ env.ARIADNE_COMMIT }}", path: .cache/ariadne}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7.0.0
+        with: {go-version-file: .cache/ariadne/gateway/go.mod, cache-dependency-path: .cache/ariadne/gateway/go.sum}
+      - run: rustup toolchain install 1.98 --profile minimal && rustup default 1.98
+      - run: make parity
