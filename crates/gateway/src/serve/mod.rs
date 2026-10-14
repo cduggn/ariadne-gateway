@@ -130,7 +130,9 @@ async fn serve(State(s): State<Server>, req: Request) -> Response {
         Dispatch::Serve(Route::Readyz) => readyz(&s.0),
         Dispatch::Serve(Route::Workers) => workers(&s.0),
         Dispatch::Serve(Route::WorkerMetrics(pod)) => worker_metrics(&s.0, &pod).await,
-        Dispatch::Serve(Route::Metrics) => metrics(&s.0),
+        Dispatch::Serve(Route::Metrics) => {
+            metrics(&s.0, req.headers().get(header::ACCEPT_ENCODING))
+        }
         Dispatch::Redirect(location) => redirect(req.method(), &location),
         Dispatch::MethodNotAllowed { allow } => {
             let mut r = http_error(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
@@ -189,34 +191,67 @@ async fn worker_metrics(s: &Inner, pod: &str) -> Response {
     }
 }
 
-fn metrics(s: &Inner) -> Response {
-    let body = s
+/// The exposition as promhttp served it: gzipped when the client accepts gzip.
+fn metrics(s: &Inner, accept_encoding: Option<&HeaderValue>) -> Response {
+    let text = s
         .opt
         .metrics
         .as_ref()
         .map(|render| render())
         .unwrap_or_default();
-    let mut r = response(StatusCode::OK, body);
+    let gzipped = accepts_gzip(accept_encoding)
+        .then(|| gzip(text.as_bytes()))
+        .flatten();
+    let mut r = match gzipped {
+        Some(body) => {
+            let mut r = response(StatusCode::OK, body);
+            set(&mut r, header::CONTENT_ENCODING, "gzip");
+            r
+        }
+        None => response(StatusCode::OK, text),
+    };
     set(
         &mut r,
         header::CONTENT_TYPE,
-        "text/plain; version=0.0.4; charset=utf-8",
+        "text/plain; version=0.0.4; charset=utf-8; escaping=underscores",
     );
     r
 }
 
-/// `http.Redirect` with 301, as ServeMux sends for an unclean path.
+/// Whether `Accept-Encoding` lists gzip with a non-zero quality.
+fn accepts_gzip(v: Option<&HeaderValue>) -> bool {
+    let Some(v) = v.and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    v.split(',').any(|item| {
+        let mut parts = item.split(';').map(str::trim);
+        let coding = parts.next().unwrap_or("");
+        let q = parts
+            .find_map(|p| p.strip_prefix("q="))
+            .map_or(Some(1.0), |q| q.parse::<f64>().ok());
+        coding.eq_ignore_ascii_case("gzip") && q.is_some_and(|q| q > 0.0)
+    })
+}
+
+fn gzip(b: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write as _;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(b).ok()?;
+    enc.finish().ok()
+}
+
+/// `http.Redirect` with 307, as ServeMux sends for an unclean path.
 fn redirect(method: &Method, location: &str) -> Response {
     let get = method == Method::GET;
     let body = if get {
         format!(
-            "<a href=\"{}\">Moved Permanently</a>.\n\n",
+            "<a href=\"{}\">Temporary Redirect</a>.\n\n",
             html_escape(location)
         )
     } else {
         String::new()
     };
-    let mut r = response(StatusCode::MOVED_PERMANENTLY, body);
+    let mut r = response(StatusCode::TEMPORARY_REDIRECT, body);
     if let Ok(v) = HeaderValue::try_from(location) {
         r.headers_mut().insert(header::LOCATION, v);
     }

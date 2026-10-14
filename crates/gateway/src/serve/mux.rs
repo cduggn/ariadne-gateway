@@ -1,4 +1,4 @@
-//! Go 1.22 `http.ServeMux` routing over the gateway's fixed patterns: unclean paths redirect, a
+//! Go's `http.ServeMux` routing (as of Go 1.27) over the gateway's fixed patterns: unclean paths redirect, a
 //! known path with the wrong method is a 405 naming the allowed methods, anything else a 404.
 
 use http::Method;
@@ -42,7 +42,7 @@ impl Route {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Dispatch {
     Serve(Route),
-    /// 301 to this location.
+    /// 307 to this location, the escaped cleaned path.
     Redirect(String),
     MethodNotAllowed {
         allow: &'static str,
@@ -65,7 +65,7 @@ pub(super) fn dispatch(
     }
     let clean = clean_path(path);
     if clean != path {
-        let mut location = escape_path(&clean);
+        let mut location = clean;
         if let Some(q) = query.filter(|q| !q.is_empty()) {
             location.push('?');
             location.push_str(q);
@@ -141,20 +141,6 @@ fn unescape(s: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
-}
-
-/// `url.URL{Path: p}.String()`: everything but unreserved characters and `$&+,/:;=@` is
-/// percent-encoded, `%` included, as Go does when it redirects to a cleaned path.
-fn escape_path(p: &str) -> String {
-    let mut out = String::with_capacity(p.len());
-    for b in p.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~$&+,/:;=@".contains(&b) {
-            out.push(char::from(b));
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -250,7 +236,7 @@ mod tests {
                 "/x/../a%20b",
                 None,
                 false,
-                Dispatch::Redirect("/a%2520b".to_owned()),
+                Dispatch::Redirect("/a%20b".to_owned()),
             ),
             (get.clone(), "/heal%zzhz", None, false, Dispatch::BadRequest),
         ];
