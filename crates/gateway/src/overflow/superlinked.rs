@@ -326,6 +326,9 @@ pub(crate) enum Fault {
 impl SendError {
     pub(crate) fn fault(&self) -> Fault {
         match self {
+            // Go opens the circuit on any error without a status, a body it
+            // could not rewrite included. Serve has already parsed the body
+            // as a JSON object, so that case does not arise there.
             Self::NoBackend | Self::Body(_) | Self::Transport(_) | Self::Timeout { .. } => {
                 Fault::Backend
             }
