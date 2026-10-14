@@ -271,9 +271,6 @@ fn go_g(v: f64) -> String {
     };
     let digits = mantissa.replace('.', "");
     let exp: i32 = exp.parse().unwrap_or(0);
-    if v == 0.0 {
-        return format!("{sign}0");
-    }
     if !(-4..6).contains(&exp) {
         let (first, rest) = digits.split_at(1);
         let point = if rest.is_empty() { "" } else { "." };
@@ -542,4 +539,342 @@ fn method_not_allowed(allow: &'static str) -> Response {
         .headers_mut()
         .insert(ALLOW, HeaderValue::from_static(allow));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake::{Served, serve};
+    use crate::fleet::scrape::parse_metrics;
+
+    async fn start() -> (Worker, Served) {
+        let worker = Worker::new();
+        let served = serve(worker.router()).await.expect("serve the fake");
+        (worker, served)
+    }
+
+    /// A chat body of exactly `n` bytes, padded in the user message.
+    fn body_of_length(n: usize) -> Vec<u8> {
+        let head = r#"{"model":"m","messages":[{"role":"user","content":""#;
+        let tail = r#""}]}"#;
+        let body = format!("{head}{}{tail}", "a".repeat(n - head.len() - tail.len()));
+        assert_eq!(body.len(), n);
+        body.into_bytes()
+    }
+
+    async fn post_chat(served: &Served, request_id: &str, body: Vec<u8>) -> (u16, Value) {
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", served.url()))
+            .header("X-Request-Id", request_id)
+            .body(body)
+            .send()
+            .await
+            .expect("POST");
+        let status = response.status().as_u16();
+        let raw = response.bytes().await.expect("body");
+        let out = if status == 200 {
+            serde_json::from_slice(&raw).expect("response is JSON")
+        } else {
+            Value::Null
+        };
+        (status, out)
+    }
+
+    fn tool_name(out: &Value) -> &str {
+        out["choices"][0]["message"]["tool_calls"][0]["function"]["name"]
+            .as_str()
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn chat_usage_counts_body_bytes() {
+        let (worker, served) = start().await;
+        let (status, out) = post_chat(&served, "run-a-s1", body_of_length(70)).await;
+
+        assert_eq!(status, 200);
+        assert_eq!(
+            out["usage"],
+            json!({"prompt_tokens": 20, "completion_tokens": 35, "total_tokens": 55,
+                   "prompt_tokens_details": {"cached_tokens": 0}})
+        );
+        let choice = &out["choices"][0];
+        assert_eq!(choice["finish_reason"], "tool_calls");
+        assert_eq!(tool_name(&out), "submit_diagnosis");
+        assert!(
+            choice["message"]["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .unwrap()
+                .contains(r#""status":"inconclusive""#)
+        );
+        let recorded = worker.requests();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].body.len(), 70);
+        assert_eq!(recorded[0].header["x-request-id"], "run-a-s1");
+    }
+
+    #[tokio::test]
+    async fn steps_call_read_tools_before_submitting() {
+        let (worker, served) = start().await;
+        worker.set(|s| s.steps = 2);
+        let tool = r#"{"role":"tool","tool_call_id":"c","content":"x"}"#;
+        let mut got = Vec::new();
+        for done in 0..=2 {
+            let msgs = format!(
+                r#"{{"role":"user","content":"go"}}{}"#,
+                format!(",{tool}").repeat(done)
+            );
+            let body = format!(r#"{{"model":"m","messages":[{msgs}]}}"#);
+            let (_, out) = post_chat(&served, "run-a-s1", body.into_bytes()).await;
+            got.push(tool_name(&out).to_owned());
+        }
+        assert_eq!(
+            got,
+            ["list_problem_pods", "list_resources", "submit_diagnosis"]
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_caches_shared_prefix_within_run() {
+        let (_worker, served) = start().await;
+        let first = body_of_length(70);
+        let mut second = first[..67].to_vec();
+        second.extend_from_slice(format!(r#"{}"}}]}}"#, "b".repeat(10)).as_bytes());
+
+        post_chat(&served, "run-a-s1", first).await;
+        let (_, same) = post_chat(&served, "run-a-s2", second.clone()).await;
+        assert_eq!(same["usage"]["prompt_tokens_details"]["cached_tokens"], 20);
+        assert_eq!(same["usage"]["prompt_tokens"], 24);
+        let (_, other) = post_chat(&served, "run-b-s1", second).await;
+        assert_eq!(other["usage"]["prompt_tokens_details"]["cached_tokens"], 0);
+    }
+
+    #[tokio::test]
+    async fn metrics_and_status_follow_settings() {
+        let (worker, served) = start().await;
+        let client = reqwest::Client::new();
+        let metrics = format!("{}/metrics", served.url());
+
+        worker.set(|s| {
+            s.kv_usage = 0.42;
+            s.waiting = 3.0;
+        });
+        let body = client.get(&metrics).send().await.unwrap().bytes().await;
+        let sample = parse_metrics(&body.unwrap()).expect("parse metrics");
+        assert_eq!(sample.kv_usage, Some(0.42));
+        assert_eq!(sample.waiting, 3.0);
+        assert_eq!(sample.kv_pool_tokens, 79056);
+
+        worker.set(|s| {
+            s.status = StatusCode::INTERNAL_SERVER_ERROR;
+            s.metrics_down = true;
+        });
+        let (status, _) = post_chat(&served, "run-a-s1", body_of_length(70)).await;
+        assert_eq!(status, 500);
+        let response = client.get(&metrics).send().await.unwrap();
+        assert_eq!(response.status(), 503);
+        assert_eq!(response.text().await.unwrap(), "metrics unavailable\n");
+    }
+
+    #[tokio::test]
+    async fn metrics_text_matches_the_go_fake_byte_for_byte() {
+        let (worker, served) = start().await;
+        worker.set(|s| {
+            s.kv_usage = 1e-5;
+            s.waiting = 0.1;
+            s.pool_blocks = 7;
+        });
+        let response = reqwest::get(format!("{}/metrics", served.url()))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()[CONTENT_TYPE],
+            "text/plain; version=0.0.4"
+        );
+        let want = r#"# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
+# TYPE vllm:cache_config_info gauge
+vllm:cache_config_info{block_size="16",num_gpu_blocks="7"} 1
+# HELP vllm:num_requests_waiting Number of requests waiting to be processed.
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{model_name="fake"} 0.1
+# HELP vllm:kv_cache_usage_perc KV-cache usage. 1 means 100 percent usage.
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc{model_name="fake"} 1e-05
+# HELP vllm:time_to_first_token_seconds Histogram of time to first token in seconds.
+# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_bucket{model_name="fake",le="0.1"} 40
+vllm:time_to_first_token_seconds_bucket{model_name="fake",le="0.5"} 90
+vllm:time_to_first_token_seconds_bucket{model_name="fake",le="1.0"} 99
+vllm:time_to_first_token_seconds_bucket{model_name="fake",le="+Inf"} 100
+vllm:time_to_first_token_seconds_count{model_name="fake"} 100
+vllm:time_to_first_token_seconds_sum{model_name="fake"} 21.5
+"#;
+        assert_eq!(response.text().await.unwrap(), want);
+    }
+
+    /// Expected values are what the Go fake printed for each `--kv-usage`.
+    #[test]
+    fn go_g_formats_as_go_percent_g() {
+        let cases = [
+            (0.1, "0.1"),
+            (0.95, "0.95"),
+            (1e-5, "1e-05"),
+            (0.0, "0"),
+            (-0.0, "-0"),
+            (0.42, "0.42"),
+            (3.0, "3"),
+            (100000.0, "100000"),
+            (1000000.0, "1e+06"),
+            (1234567.0, "1.234567e+06"),
+            (123456.7, "123456.7"),
+            (0.0001, "0.0001"),
+            (0.00012345, "0.00012345"),
+            (-0.5, "-0.5"),
+            (1e21, "1e+21"),
+            (0.1234567890123, "0.1234567890123"),
+            (2.5e-300, "2.5e-300"),
+            (f64::INFINITY, "+Inf"),
+            (f64::NEG_INFINITY, "-Inf"),
+            (f64::NAN, "NaN"),
+        ];
+        for (value, want) in cases {
+            assert_eq!(go_g(value), want, "{value:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn query_reports_the_engine_and_counts() {
+        let (worker, served) = start().await;
+        worker.set(|s| s.engine_id = "engine-<0>".to_owned());
+        let response = reqwest::get(format!("{}/query", served.url()))
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+        assert_eq!(
+            response.text().await.unwrap(),
+            "{\"0\":{\"engine_id\":\"engine-\\u003c0\\u003e\"}}\n"
+        );
+        assert_eq!(worker.queries(), 1);
+        assert_eq!(worker.requests(), []);
+    }
+
+    #[tokio::test]
+    async fn remote_decode_is_held_at_one_token() {
+        let (worker, served) = start().await;
+        let body = br#"{"model":"m","kv_transfer_params":{"do_remote_decode":true,"do_remote_prefill":false}}"#;
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", served.url()))
+            .body(body.to_vec())
+            .send()
+            .await
+            .unwrap();
+        let text = response.text().await.unwrap();
+        let created = serde_json::from_str::<Value>(&text).unwrap()["created"]
+            .as_u64()
+            .expect("created is a unix time");
+        assert_eq!(
+            text,
+            format!(
+                r#"{{"id":"chatcmpl-fake-hold","object":"chat.completion","created":{created},"model":"","choices":[{{"index":0,"message":{{"role":"assistant","content":"","tool_calls":null}},"finish_reason":"length"}}],"usage":{{"prompt_tokens":25,"completion_tokens":1,"total_tokens":26,"prompt_tokens_details":{{"cached_tokens":0}}}}}}"#
+            )
+        );
+        assert_eq!(
+            worker.requests()[0].response.as_deref(),
+            Some(text.as_bytes())
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_prefill_reports_the_prompt_cached_and_takes_the_pull_settings() {
+        let (worker, served) = start().await;
+        let body = br#"{"model":"m","kv_transfer_params":{"do_remote_prefill":true}}"#.to_vec();
+        let (status, out) = post_chat(&served, "run-p-s1", body.clone()).await;
+        assert_eq!(status, 200);
+        assert_eq!(out["usage"]["prompt_tokens"], 18);
+        assert_eq!(out["usage"]["prompt_tokens_details"]["cached_tokens"], 18);
+
+        worker.set(|s| s.pull_status = Some(StatusCode::BAD_GATEWAY));
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", served.url()))
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 502);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+        assert_eq!(
+            response.text().await.unwrap(),
+            r#"{"error":{"code":502,"message":"fake worker answered 502","type":"server_error"}}"#
+        );
+        let (status, _) = post_chat(&served, "run-p-s2", body_of_length(70)).await;
+        assert_eq!(status, 200, "pull settings leave other requests alone");
+
+        worker.set(|s| s.pull_latency = Some(Duration::from_secs(30)));
+        let sent = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", served.url()))
+            .body(br#"{"kv_transfer_params":{"do_remote_prefill":true}}"#.to_vec())
+            .timeout(Duration::from_millis(100))
+            .send()
+            .await;
+        assert!(sent.is_err_and(|err| err.is_timeout()));
+    }
+
+    #[tokio::test]
+    async fn chat_left_during_the_latency_gets_no_answer() {
+        let (worker, served) = start().await;
+        worker.set(|s| s.latency = Duration::from_millis(300));
+        let sent = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", served.url()))
+            .body(body_of_length(70))
+            .timeout(Duration::from_millis(50))
+            .send()
+            .await;
+        assert!(sent.is_err_and(|err| err.is_timeout()));
+
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let recorded = worker.requests();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].response, None,
+            "the handler stopped when the client left"
+        );
+    }
+
+    #[tokio::test]
+    async fn other_routes_answer_as_go_serve_mux_does() {
+        let (worker, served) = start().await;
+        let client = reqwest::Client::new();
+        let cases = [
+            (Method::GET, "/", 404, None),
+            (Method::GET, "/metrics/", 404, None),
+            (Method::POST, "/v1/chat", 404, None),
+            (Method::POST, "/metrics", 405, Some("GET, HEAD")),
+            (Method::PUT, "/query", 405, Some("GET, HEAD")),
+            (Method::GET, "/v1/chat/completions", 405, Some("POST")),
+        ];
+        for (method, path, status, allow) in cases {
+            let response = client
+                .request(method.clone(), format!("{}{path}", served.url()))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{method} {path}");
+            assert_eq!(
+                response.headers().get(ALLOW).map(|v| v.to_str().unwrap()),
+                allow,
+                "{method} {path}"
+            );
+        }
+        let head = client
+            .head(format!("{}/query", served.url()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(head.status(), 200);
+        assert_eq!(
+            worker.queries(),
+            1,
+            "HEAD is a query, as it is for Go's GET pattern"
+        );
+        assert_eq!(worker.requests(), []);
+    }
 }
