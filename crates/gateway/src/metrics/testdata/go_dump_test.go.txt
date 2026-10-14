@@ -1,0 +1,78 @@
+// Records go_exposition.txt from the Go gateway: copy into gateway/internal/metrics of the Go source and run
+// DUMP=$PWD/go_exposition.txt go test -run TestDump ./internal/metrics/
+package metrics
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cduggn/ariadne/gateway/internal/decide"
+	"github.com/cduggn/ariadne/gateway/internal/fleet"
+	"github.com/cduggn/ariadne/gateway/internal/overflow"
+	"github.com/cduggn/ariadne/gateway/internal/serve"
+)
+
+func us(n int) time.Duration { return time.Duration(n) * time.Microsecond }
+
+func TestDump(t *testing.T) {
+	m, gate, now := fixture(t)
+	gate.Observe("vllm-0", fleet.Scrape{At: now.Add(-1500 * time.Millisecond), KVPoolTokens: 10000, KVUsage: 0.3})
+	gate.Observe("vllm-1", fleet.Scrape{At: now.Add(-4 * time.Second), KVPoolTokens: 10000, KVUsage: 0.9})
+	gate.SetReady("vllm-0", true)
+	req := decide.Request{ID: "run-m-s1", Run: "run-m", Step: 1, Tenant: "platform", Priority: decide.Interactive,
+		BodyBytes: 350, MaxOut: 100, Arrived: now, Deadline: now.Add(10 * time.Second)}
+	_, first, err := gate.Admit(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate.Settle(first, fleet.Outcome{OK: true, PromptTokens: 150, CompletionTokens: 50, Latency: 2 * time.Second}, 350)
+	req.ID, req.Step = "run-m-s2", 2
+	if _, _, err := gate.Admit(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	evs := append([]serve.Event{}, representative...)
+	evs = append(evs,
+		serve.Event{Pod: "vllm-1", Policy: decide.PolicyPrefixThenLoad, Sticky: decide.StickyBrokenLoad, Priority: decide.Interactive, Class: decide.Internal,
+			Status: 200, Hop: "hopped", HopTime: dur(40), Gateway: dur(2), Upstream: dur(300), Total: dur(342),
+			PromptTokens: 2000, CachedTokens: 100, CompletionTokens: 10, FinishReason: "stop"},
+		serve.Event{Pod: "vllm-1", Policy: decide.PolicyPrefixThenLoad, Sticky: decide.StickyBrokenLoad, Status: 200, Hop: "failed", HopTime: dur(10), Gateway: dur(1), Total: dur(11)},
+		serve.Event{Pod: "vllm-0", Policy: decide.PolicyP2C, Sticky: decide.StickyBrokenLoad, Status: 200, Hop: "below_threshold"},
+		serve.Event{Status: 200, Class: decide.Internal, Sticky: decide.StickyNew, Overflow: overflow.Sent,
+			OverflowTime: dur(800), Gateway: dur(1), Total: dur(801), PromptTokens: 40, CompletionTokens: 30, FinishReason: "tool_calls"},
+		serve.Event{Status: 503, Reason: "kv_free", Class: decide.Internal, Sticky: decide.StickyNew, Overflow: overflow.Failed, OverflowTime: dur(200), Gateway: dur(1), Total: dur(201)},
+		serve.Event{Status: 503, Reason: "kv_free", Class: decide.Public, Sticky: decide.StickyNew, Overflow: overflow.Unavailable, Gateway: dur(1), Total: dur(1)},
+		serve.Event{Status: 503, Reason: "timeout_queue", Class: decide.Internal, Sticky: decide.StickyNew, Overflow: overflow.Capped, Gateway: dur(1), Total: dur(1)},
+		serve.Event{Status: 503, Reason: "p99_spread", Class: decide.Internal, Sticky: decide.StickyNew, Overflow: overflow.Quota, Gateway: dur(1), Total: dur(1)},
+		serve.Event{Status: 200, Class: decide.Restricted, Overflow: overflow.Sent, OverflowTime: dur(5)},
+		serve.Event{Pod: "vllm-0", Policy: decide.PolicyPrefixThenLoad, Sticky: decide.StickyHit, Reason: "client_gone",
+			Gateway: dur(1), Queue: dur(2), Upstream: us(7), Total: dur(3)},
+		serve.Event{Pod: "vllm-0", Policy: decide.PolicyPrefixThenLoad, Sticky: decide.StickyHit, Priority: decide.Interactive, Class: decide.Public,
+			Status: 200, Gateway: us(10), Upstream: 150 * time.Second, Total: 150 * time.Second,
+			PromptTokens: 5000000, CachedTokens: 4000000, CompletionTokens: 1234567, FinishReason: "length"},
+		serve.Event{Sticky: decide.StickyNone, Status: 503, Reason: "queue_full", Gateway: dur(1), Queue: dur(2), Total: dur(3)},
+		serve.Event{Pod: "vllm-1", Policy: decide.PolicyLeastLoaded, Sticky: decide.StickyBrokenGone, Status: 200,
+			PromptTokens: 100, CachedTokens: 3000, CompletionTokens: 1, FinishReason: "we\"ird\\\nreason", Gateway: dur(1), Upstream: dur(5), Total: dur(6)},
+	)
+	for _, ev := range evs {
+		m.Observe(ev)
+	}
+	var keep []string
+	for _, l := range strings.Split(scrape(t, m), "\n") {
+		if strings.Contains(l, "go_") || strings.Contains(l, "process_") {
+			continue
+		}
+		keep = append(keep, l)
+	}
+	os.WriteFile(os.Getenv("DUMP"), []byte(strings.Join(keep, "\n")), 0o644)
+
+	var fl []string
+	for _, f := range []float64{0, 1, -1, 0.005, 1e-05, 0.0001, 0.00012345, 123456, 999999, 1e6, 1234567, 3.899e6, 1e20, 1e21, 0.1 + 0.2, 1.0 / 3, 120, 2.5, -2.5e-7, 5e-324, 1.7976931348623157e308} {
+		fl = append(fl, fmt.Sprintf("(%v, %q)", strconv.FormatFloat(f, 'e', -1, 64), strconv.FormatFloat(f, 'g', -1, 64)))
+	}
+	os.WriteFile(os.Getenv("DUMP")+".floats", []byte(strings.Join(fl, "\n")), 0o644)
+}

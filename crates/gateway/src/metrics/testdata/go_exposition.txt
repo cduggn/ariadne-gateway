@@ -1,0 +1,242 @@
+# HELP orch_completed_total Worker answers relayed to the client, by pod, status and finish reason.
+# TYPE orch_completed_total counter
+orch_completed_total{finish_reason="",pod="overflow",status="200"} 1
+orch_completed_total{finish_reason="",pod="vllm-0",status="200"} 1
+orch_completed_total{finish_reason="",pod="vllm-1",status="200"} 1
+orch_completed_total{finish_reason="",pod="vllm-1",status="500"} 1
+orch_completed_total{finish_reason="length",pod="vllm-0",status="200"} 1
+orch_completed_total{finish_reason="stop",pod="vllm-1",status="200"} 1
+orch_completed_total{finish_reason="tool_calls",pod="overflow",status="200"} 1
+orch_completed_total{finish_reason="tool_calls",pod="vllm-0",status="200"} 1
+orch_completed_total{finish_reason="we\"ird\\\nreason",pod="vllm-1",status="200"} 1
+# HELP orch_completion_tokens_total Completion tokens generated per pod.
+# TYPE orch_completion_tokens_total counter
+orch_completion_tokens_total{pod="vllm-0"} 1.234687e+06
+orch_completion_tokens_total{pod="vllm-1"} 11
+# HELP orch_hop_total KV hops for runs moved off a worker that still held their history: hopped, failed or busy (the worker recomputed), below_threshold or recompute_cheaper.
+# TYPE orch_hop_total counter
+orch_hop_total{result="below_threshold"} 1
+orch_hop_total{result="busy"} 0
+orch_hop_total{result="failed"} 1
+orch_hop_total{result="hopped"} 1
+orch_hop_total{result="recompute_cheaper"} 0
+# HELP orch_kv_free_ratio Free KV over the Ready workers as a fraction of their pools, 0 when none is Ready.
+# TYPE orch_kv_free_ratio gauge
+orch_kv_free_ratio{pool="sliced"} 0.67
+# HELP orch_overflow_backend_available 1 while the overflow backend's last probe passed and no send has failed since; 0 without a backend.
+# TYPE orch_overflow_backend_available gauge
+orch_overflow_backend_available 0
+# HELP orch_overflow_total Overflow decisions for gateway 503s: blocked_invariant kept a restricted request on the box, no_backend had nowhere to send it, sent relayed the backend's answer; failed, unavailable, capped and quota answered the 503.
+# TYPE orch_overflow_total counter
+orch_overflow_total{result="blocked_invariant"} 1
+orch_overflow_total{result="capped"} 1
+orch_overflow_total{result="failed"} 1
+orch_overflow_total{result="no_backend"} 0
+orch_overflow_total{result="quota"} 1
+orch_overflow_total{result="sent"} 2
+orch_overflow_total{result="unavailable"} 1
+# HELP orch_pick_total Requests placed on a worker, by pod and pick policy.
+# TYPE orch_pick_total counter
+orch_pick_total{pod="vllm-0",policy="p2c"} 1
+orch_pick_total{pod="vllm-0",policy="prefix_then_load"} 3
+orch_pick_total{pod="vllm-1",policy="least_loaded"} 2
+orch_pick_total{pod="vllm-1",policy="prefix_then_load"} 3
+# HELP orch_pick_unknown_snapshot_total Placements made on a worker whose telemetry was stale.
+# TYPE orch_pick_unknown_snapshot_total counter
+orch_pick_unknown_snapshot_total{pod="vllm-1"} 1
+# HELP orch_prompt_tokens_total Prompt tokens by cache outcome: shared_hit, run_hit or miss.
+# TYPE orch_prompt_tokens_total counter
+orch_prompt_tokens_total{kind="miss",pod="vllm-0"} 1.0005e+06
+orch_prompt_tokens_total{kind="miss",pod="vllm-1"} 1900
+orch_prompt_tokens_total{kind="run_hit",pod="vllm-0"} 3.996702e+06
+orch_prompt_tokens_total{kind="run_hit",pod="vllm-1"} 0
+orch_prompt_tokens_total{kind="shared_hit",pod="vllm-0"} 7798
+orch_prompt_tokens_total{kind="shared_hit",pod="vllm-1"} 3100
+# HELP orch_replica_active_requests Requests the gateway holds in flight on the worker.
+# TYPE orch_replica_active_requests gauge
+orch_replica_active_requests{pod="vllm-0",pool="sliced"} 1
+orch_replica_active_requests{pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_healthy 1 while the gate may place on the worker.
+# TYPE orch_replica_healthy gauge
+orch_replica_healthy{pod="vllm-0",pool="sliced"} 1
+orch_replica_healthy{pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_kv_free_ratio Free KV as a fraction of the pool, net of the gateway's reservations.
+# TYPE orch_replica_kv_free_ratio gauge
+orch_replica_kv_free_ratio{pod="vllm-0",pool="sliced"} 0.67
+orch_replica_kv_free_ratio{pod="vllm-1",pool="sliced"} 0.1
+# HELP orch_replica_mean_service_seconds Recent mean seconds per request on the worker, 0 until the first.
+# TYPE orch_replica_mean_service_seconds gauge
+orch_replica_mean_service_seconds{pod="vllm-0",pool="sliced"} 2
+orch_replica_mean_service_seconds{pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_phase 1 for the worker's current phase, 0 for the others.
+# TYPE orch_replica_phase gauge
+orch_replica_phase{phase="down",pod="vllm-0",pool="sliced"} 1
+orch_replica_phase{phase="down",pod="vllm-1",pool="sliced"} 1
+orch_replica_phase{phase="ready",pod="vllm-0",pool="sliced"} 0
+orch_replica_phase{phase="ready",pod="vllm-1",pool="sliced"} 0
+orch_replica_phase{phase="warming",pod="vllm-0",pool="sliced"} 0
+orch_replica_phase{phase="warming",pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_queue_depth Requests waiting in the gateway's queue for the worker.
+# TYPE orch_replica_queue_depth gauge
+orch_replica_queue_depth{pod="vllm-0",pool="sliced"} 0
+orch_replica_queue_depth{pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_restarts_total Down to Warming transitions, including the first at startup.
+# TYPE orch_replica_restarts_total counter
+orch_replica_restarts_total{pod="vllm-0",pool="sliced"} 0
+orch_replica_restarts_total{pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_saturating 1 while the worker's free KV is below the admission line.
+# TYPE orch_replica_saturating gauge
+orch_replica_saturating{pod="vllm-0",pool="sliced"} 0
+orch_replica_saturating{pod="vllm-1",pool="sliced"} 1
+# HELP orch_replica_snapshot_age_seconds Seconds since the worker's last successful scrape.
+# TYPE orch_replica_snapshot_age_seconds gauge
+orch_replica_snapshot_age_seconds{pod="vllm-0",pool="sliced"} 1.5
+orch_replica_snapshot_age_seconds{pod="vllm-1",pool="sliced"} 4
+# HELP orch_replica_tokens_in_flight Tokens the gateway has reserved on the worker since its last scrape.
+# TYPE orch_replica_tokens_in_flight gauge
+orch_replica_tokens_in_flight{pod="vllm-0",pool="sliced"} 300
+orch_replica_tokens_in_flight{pod="vllm-1",pool="sliced"} 0
+# HELP orch_replica_warm 1 while the fleet's warm-up gate holds the worker Ready.
+# TYPE orch_replica_warm gauge
+orch_replica_warm{pod="vllm-0",pool="sliced"} 0
+orch_replica_warm{pod="vllm-1",pool="sliced"} 0
+# HELP orch_request_duration_seconds Request time by stage: gateway, queue, hop (KV copy from the run's old worker), local (upstream), overflow (the off-box backend) and e2e.
+# TYPE orch_request_duration_seconds histogram
+orch_request_duration_seconds_bucket{stage="e2e",le="0.005"} 10
+orch_request_duration_seconds_bucket{stage="e2e",le="0.01"} 11
+orch_request_duration_seconds_bucket{stage="e2e",le="0.025"} 12
+orch_request_duration_seconds_bucket{stage="e2e",le="0.05"} 12
+orch_request_duration_seconds_bucket{stage="e2e",le="0.1"} 12
+orch_request_duration_seconds_bucket{stage="e2e",le="0.25"} 13
+orch_request_duration_seconds_bucket{stage="e2e",le="0.5"} 14
+orch_request_duration_seconds_bucket{stage="e2e",le="1"} 16
+orch_request_duration_seconds_bucket{stage="e2e",le="2.5"} 17
+orch_request_duration_seconds_bucket{stage="e2e",le="5"} 17
+orch_request_duration_seconds_bucket{stage="e2e",le="10"} 17
+orch_request_duration_seconds_bucket{stage="e2e",le="30"} 17
+orch_request_duration_seconds_bucket{stage="e2e",le="60"} 17
+orch_request_duration_seconds_bucket{stage="e2e",le="120"} 18
+orch_request_duration_seconds_bucket{stage="e2e",le="+Inf"} 19
+orch_request_duration_seconds_sum{stage="e2e"} 268.11999999999995
+orch_request_duration_seconds_count{stage="e2e"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.005"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.01"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.025"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.05"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.1"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.25"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="0.5"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="1"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="2.5"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="5"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="10"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="30"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="60"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="120"} 19
+orch_request_duration_seconds_bucket{stage="gateway",le="+Inf"} 19
+orch_request_duration_seconds_sum{stage="gateway"} 0.021010000000000008
+orch_request_duration_seconds_count{stage="gateway"} 19
+orch_request_duration_seconds_bucket{stage="hop",le="0.005"} 0
+orch_request_duration_seconds_bucket{stage="hop",le="0.01"} 1
+orch_request_duration_seconds_bucket{stage="hop",le="0.025"} 1
+orch_request_duration_seconds_bucket{stage="hop",le="0.05"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="0.1"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="0.25"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="0.5"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="1"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="2.5"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="5"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="10"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="30"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="60"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="120"} 2
+orch_request_duration_seconds_bucket{stage="hop",le="+Inf"} 2
+orch_request_duration_seconds_sum{stage="hop"} 0.05
+orch_request_duration_seconds_count{stage="hop"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.005"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.01"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.025"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.05"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.1"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.25"} 2
+orch_request_duration_seconds_bucket{stage="local",le="0.5"} 4
+orch_request_duration_seconds_bucket{stage="local",le="1"} 4
+orch_request_duration_seconds_bucket{stage="local",le="2.5"} 5
+orch_request_duration_seconds_bucket{stage="local",le="5"} 5
+orch_request_duration_seconds_bucket{stage="local",le="10"} 5
+orch_request_duration_seconds_bucket{stage="local",le="30"} 5
+orch_request_duration_seconds_bucket{stage="local",le="60"} 5
+orch_request_duration_seconds_bucket{stage="local",le="120"} 6
+orch_request_duration_seconds_bucket{stage="local",le="+Inf"} 7
+orch_request_duration_seconds_sum{stage="local"} 267.005007
+orch_request_duration_seconds_count{stage="local"} 7
+orch_request_duration_seconds_bucket{stage="overflow",le="0.005"} 1
+orch_request_duration_seconds_bucket{stage="overflow",le="0.01"} 1
+orch_request_duration_seconds_bucket{stage="overflow",le="0.025"} 1
+orch_request_duration_seconds_bucket{stage="overflow",le="0.05"} 1
+orch_request_duration_seconds_bucket{stage="overflow",le="0.1"} 1
+orch_request_duration_seconds_bucket{stage="overflow",le="0.25"} 2
+orch_request_duration_seconds_bucket{stage="overflow",le="0.5"} 2
+orch_request_duration_seconds_bucket{stage="overflow",le="1"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="2.5"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="5"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="10"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="30"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="60"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="120"} 3
+orch_request_duration_seconds_bucket{stage="overflow",le="+Inf"} 3
+orch_request_duration_seconds_sum{stage="overflow"} 1.005
+orch_request_duration_seconds_count{stage="overflow"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="0.005"} 2
+orch_request_duration_seconds_bucket{stage="queue",le="0.01"} 2
+orch_request_duration_seconds_bucket{stage="queue",le="0.025"} 2
+orch_request_duration_seconds_bucket{stage="queue",le="0.05"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="0.1"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="0.25"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="0.5"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="1"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="2.5"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="5"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="10"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="30"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="60"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="120"} 3
+orch_request_duration_seconds_bucket{stage="queue",le="+Inf"} 3
+orch_request_duration_seconds_sum{stage="queue"} 0.044000000000000004
+orch_request_duration_seconds_count{stage="queue"} 3
+# HELP orch_requests_total Requests received, including those the guard rejected.
+# TYPE orch_requests_total counter
+orch_requests_total{class="internal",priority="batch"} 4
+orch_requests_total{class="internal",priority="interactive"} 2
+orch_requests_total{class="public",priority="batch"} 1
+orch_requests_total{class="public",priority="interactive"} 1
+orch_requests_total{class="restricted",priority="batch"} 11
+# HELP orch_restricted_offbox_total Restricted requests routed off the box. Must stay 0.
+# TYPE orch_restricted_offbox_total counter
+orch_restricted_offbox_total 1
+# HELP orch_shed_total Requests refused by the gateway, by reason and status code.
+# TYPE orch_shed_total counter
+orch_shed_total{code="400",reason="bad_json"} 1
+orch_shed_total{code="429",reason="tenant_tokens"} 1
+orch_shed_total{code="502",reason="upstream_error"} 1
+orch_shed_total{code="503",reason="kv_free"} 3
+orch_shed_total{code="503",reason="no_eligible_pod"} 0
+orch_shed_total{code="503",reason="p99_spread"} 1
+orch_shed_total{code="503",reason="queue_full"} 1
+orch_shed_total{code="503",reason="timeout_queue"} 1
+# HELP orch_sticky_total Stickiness outcomes relative to the run's bound worker.
+# TYPE orch_sticky_total counter
+orch_sticky_total{outcome="broken_gone"} 1
+orch_sticky_total{outcome="broken_load"} 3
+orch_sticky_total{outcome="broken_shed"} 1
+orch_sticky_total{outcome="hit"} 3
+orch_sticky_total{outcome="new"} 7
+orch_sticky_total{outcome="none"} 2
+# HELP orch_upstream_errors_total Upstream failures, transport for no answer and status for a non-200 answer.
+# TYPE orch_upstream_errors_total counter
+orch_upstream_errors_total{kind="status",pod="vllm-1"} 1
+orch_upstream_errors_total{kind="transport",pod="vllm-1"} 1
+# HELP orch_warmup_probe_seconds Latency of the worker's latest warm-up probe, the re-quoted TTFT.
+# TYPE orch_warmup_probe_seconds gauge
+orch_warmup_probe_seconds{pod="vllm-0",pool="sliced"} 0
+orch_warmup_probe_seconds{pod="vllm-1",pool="sliced"} 0
