@@ -673,13 +673,13 @@ fn parse_float(s: &str) -> Option<f64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     /// A cut of a real vLLM /metrics body, with one engine and one model
     /// label set. The TTFT histogram holds 100 observations, 50 under 0.25s
     /// and 99 under 1s.
-    const VLLM_METRICS: &str = r#"# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
+    pub(in crate::fleet) const VLLM_METRICS: &str = r#"# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
 # TYPE vllm:cache_config_info gauge
 vllm:cache_config_info{block_size="16",cache_dtype="auto",calculate_kv_scales="False",cpu_offload_gb="0",enable_prefix_caching="True",gpu_memory_utilization="0.9",num_cpu_blocks="0",num_gpu_blocks="4941",sliding_window="None",swap_space="4"} 1.0
 # HELP vllm:num_requests_running Number of requests in model execution batches.
