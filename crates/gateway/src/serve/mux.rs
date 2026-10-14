@@ -240,7 +240,7 @@ mod tests {
             ),
             (
                 get.clone(),
-                "/debug/./workers/../healthz",
+                "/debug/./workers/../../healthz",
                 None,
                 false,
                 Dispatch::Redirect("/healthz".to_owned()),
