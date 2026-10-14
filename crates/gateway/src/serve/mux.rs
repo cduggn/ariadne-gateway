@@ -19,18 +19,22 @@ impl Route {
     const fn allow(&self) -> &'static str {
         match self {
             Self::Chat => "POST",
-            Self::Healthz | Self::Readyz | Self::Workers | Self::WorkerMetrics(_) | Self::Metrics => {
-                "GET, HEAD"
-            }
+            Self::Healthz
+            | Self::Readyz
+            | Self::Workers
+            | Self::WorkerMetrics(_)
+            | Self::Metrics => "GET, HEAD",
         }
     }
 
     fn accepts(&self, m: &Method) -> bool {
         match self {
             Self::Chat => m == Method::POST,
-            Self::Healthz | Self::Readyz | Self::Workers | Self::WorkerMetrics(_) | Self::Metrics => {
-                m == Method::GET || m == Method::HEAD
-            }
+            Self::Healthz
+            | Self::Readyz
+            | Self::Workers
+            | Self::WorkerMetrics(_)
+            | Self::Metrics => m == Method::GET || m == Method::HEAD,
         }
     }
 }
@@ -40,7 +44,9 @@ pub(super) enum Dispatch {
     Serve(Route),
     /// 301 to this location.
     Redirect(String),
-    MethodNotAllowed { allow: &'static str },
+    MethodNotAllowed {
+        allow: &'static str,
+    },
     NotFound,
     /// The path has a malformed percent escape, which Go's server refuses before routing.
     BadRequest,
@@ -48,7 +54,12 @@ pub(super) enum Dispatch {
 
 /// Routes one request. `path` is the escaped request path and `query` the raw query.
 /// `metrics` says whether `GET /metrics` is registered.
-pub(super) fn dispatch(method: &Method, path: &str, query: Option<&str>, metrics: bool) -> Dispatch {
+pub(super) fn dispatch(
+    method: &Method,
+    path: &str,
+    query: Option<&str>,
+    metrics: bool,
+) -> Dispatch {
     if unescape(path).is_none() {
         return Dispatch::BadRequest;
     }
@@ -154,17 +165,65 @@ mod tests {
     fn dispatch_follows_go_servemux() {
         let get = Method::GET;
         let cases: Vec<(Method, &str, Option<&str>, bool, Dispatch)> = vec![
-            (Method::POST, "/v1/chat/completions", None, false, Dispatch::Serve(Route::Chat)),
-            (get.clone(), "/v1/chat/completions", None, false, Dispatch::MethodNotAllowed { allow: "POST" }),
-            (get.clone(), "/healthz", None, false, Dispatch::Serve(Route::Healthz)),
-            (Method::HEAD, "/readyz", None, false, Dispatch::Serve(Route::Readyz)),
-            (Method::POST, "/healthz", None, false, Dispatch::MethodNotAllowed { allow: "GET, HEAD" }),
+            (
+                Method::POST,
+                "/v1/chat/completions",
+                None,
+                false,
+                Dispatch::Serve(Route::Chat),
+            ),
+            (
+                get.clone(),
+                "/v1/chat/completions",
+                None,
+                false,
+                Dispatch::MethodNotAllowed { allow: "POST" },
+            ),
+            (
+                get.clone(),
+                "/healthz",
+                None,
+                false,
+                Dispatch::Serve(Route::Healthz),
+            ),
+            (
+                Method::HEAD,
+                "/readyz",
+                None,
+                false,
+                Dispatch::Serve(Route::Readyz),
+            ),
+            (
+                Method::POST,
+                "/healthz",
+                None,
+                false,
+                Dispatch::MethodNotAllowed { allow: "GET, HEAD" },
+            ),
             (get.clone(), "/nope", None, false, Dispatch::NotFound),
             (get.clone(), "/healthz/", None, false, Dispatch::NotFound),
             (get.clone(), "/metrics", None, false, Dispatch::NotFound),
-            (Method::POST, "/metrics", None, true, Dispatch::MethodNotAllowed { allow: "GET, HEAD" }),
-            (get.clone(), "/metrics", None, true, Dispatch::Serve(Route::Metrics)),
-            (get.clone(), "/debug/workers", None, false, Dispatch::Serve(Route::Workers)),
+            (
+                Method::POST,
+                "/metrics",
+                None,
+                true,
+                Dispatch::MethodNotAllowed { allow: "GET, HEAD" },
+            ),
+            (
+                get.clone(),
+                "/metrics",
+                None,
+                true,
+                Dispatch::Serve(Route::Metrics),
+            ),
+            (
+                get.clone(),
+                "/debug/workers",
+                None,
+                false,
+                Dispatch::Serve(Route::Workers),
+            ),
             (
                 get.clone(),
                 "/debug/workers/vllm%2D0/metrics",
@@ -172,13 +231,35 @@ mod tests {
                 false,
                 Dispatch::Serve(Route::WorkerMetrics("vllm-0".to_owned())),
             ),
-            (get.clone(), "//healthz", Some("a=1"), false, Dispatch::Redirect("/healthz?a=1".to_owned())),
-            (get.clone(), "/debug/./workers/../healthz", None, false, Dispatch::Redirect("/healthz".to_owned())),
-            (get.clone(), "/x/../a%20b", None, false, Dispatch::Redirect("/a%2520b".to_owned())),
+            (
+                get.clone(),
+                "//healthz",
+                Some("a=1"),
+                false,
+                Dispatch::Redirect("/healthz?a=1".to_owned()),
+            ),
+            (
+                get.clone(),
+                "/debug/./workers/../healthz",
+                None,
+                false,
+                Dispatch::Redirect("/healthz".to_owned()),
+            ),
+            (
+                get.clone(),
+                "/x/../a%20b",
+                None,
+                false,
+                Dispatch::Redirect("/a%2520b".to_owned()),
+            ),
             (get.clone(), "/heal%zzhz", None, false, Dispatch::BadRequest),
         ];
         for (method, path, query, metrics, want) in cases {
-            assert_eq!(dispatch(&method, path, query, metrics), want, "{method} {path}");
+            assert_eq!(
+                dispatch(&method, path, query, metrics),
+                want,
+                "{method} {path}"
+            );
         }
     }
 }
