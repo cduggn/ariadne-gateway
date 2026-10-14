@@ -1,8 +1,6 @@
-# The inference gateway (C11, D-42) in front of the vLLM workers. `make gateway-image` builds gateway/Dockerfile for
-# amd64 and arm64, pushes it to Docker Hub (public, so the node pulls without credentials) and pins its digest below.
-# `make gateway` records the warm-up body into the gateway-warmup ConfigMap and applies this file. Cluster-internal
-# only: a ClusterIP Service, reached with `make tunnel` (svc/gateway). Prometheus scrapes its orch_* metrics through
-# the same annotations as vLLM.
+# The inference gateway in front of the vLLM workers. `make image` builds the Dockerfile for amd64 and arm64 and
+# pushes it; pin the pushed digest on the image line below. The warm-up body comes from the gateway-warmup ConfigMap.
+# Cluster-internal only: a ClusterIP Service. Prometheus scrapes its orch_* metrics through the pod annotations.
 apiVersion: v1
 kind: Service
 metadata:
@@ -36,18 +34,18 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
       containers:
         - name: gateway
-          image: docker.io/cdugga/cluster-doctor-gateway@sha256:a0b7c8a5832c0bad3ec4c074b2c9828a2bf223cf00990beb7f6f9d3275f91c5a   # make gateway-image rewrites this line
+          image: docker.io/cdugga/ariadne-gateway:REPLACE-WITH-DIGEST   # pin the image `make image` pushed, by digest
           imagePullPolicy: IfNotPresent
           env:
             - {name: GW_LISTEN, value: ":8000"}
             - {name: GW_WARM_BODY, value: /etc/gateway/warm.json}
-            - {name: GW_POLICY, value: prefix_then_load}     # make gateway POLICY=least_loaded for the A/B control arm
+            - {name: GW_POLICY, value: prefix_then_load}     # least_loaded is the control arm of the stickiness A/B
             - {name: GW_POOL, value: sliced}
             # GW_WORKERS defaults to vllm-0 and vllm-1 on the headless vllm Service; an absent vllm-1 is just Down.
             # Overflow to Superlinked (D-53, design/overflow.md): off until the key arrives. The key comes from the
             # gateway-overflow Secret, which does not exist until someone creates it:
             #   kubectl create secret generic gateway-overflow --from-literal=api-key=<key>
-            #   make gateway OVERFLOW=1            # or: kubectl set env deployment/gateway GW_OVERFLOW=true
+            #   kubectl set env deployment/gateway GW_OVERFLOW=true
             # A restricted request never leaves whatever these say; the backend is probed and falls back to the 503.
             - {name: GW_OVERFLOW, value: "false"}
             - {name: GW_OVERFLOW_BASE_URL, value: https://api.superlinked.com}

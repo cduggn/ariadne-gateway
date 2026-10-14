@@ -1,5 +1,9 @@
 # Gateway design (C11), synthesized 2026-09-28
 
+> Written for the Go gateway in [cduggn/Ariadne](https://github.com/cduggn/Ariadne). The rules and numbers hold for
+> this Rust port. Paths, `make` targets and Go package names refer to Ariadne; the README maps each package to its
+> module here.
+
 Status: proposed, awaiting sign-off. It comes from three competing sketches and a cross-judge. The sketches are in
 the session scratchpad (`arena-gateway/candidate-{1,2,3}`). Candidate 2 is the base. Candidates 1 and 3 each
 contributed several ideas.

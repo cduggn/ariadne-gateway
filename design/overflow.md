@@ -1,5 +1,9 @@
 # Overflow to Superlinked: runbook (D-53)
 
+> Written for the Go gateway in [cduggn/Ariadne](https://github.com/cduggn/Ariadne). The rules and numbers hold for
+> this Rust port. Paths, `make` targets and Go package names refer to Ariadne; the README maps each package to its
+> module here.
+
 Status: built and tested against a fake backend, off in the deployment, waiting for Superlinked API access (F22).
 The gateway's stay-or-leave rule (`design/gateway.md`, pipeline step 3) is unchanged: only a 503 may leave the box, and
 a restricted request never does. This page is what to do when the key arrives, what to watch, and how to prove the
