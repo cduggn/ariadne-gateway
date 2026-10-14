@@ -421,6 +421,10 @@ async fn which_failures_open_the_circuit() {
     let status = |code: u16| SendError::Status(StatusCode::from_u16(code).unwrap());
     let cases = [
         (SendError::Transport(dial), Fault::Backend),
+        (
+            SendError::Body(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
+            Fault::Request,
+        ),
         (SendError::Timeout { url: String::new() }, Fault::Backend),
         (status(401), Fault::Backend),
         (status(402), Fault::Backend),

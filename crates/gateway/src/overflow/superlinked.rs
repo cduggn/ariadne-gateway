@@ -326,12 +326,10 @@ pub(crate) enum Fault {
 impl SendError {
     pub(crate) fn fault(&self) -> Fault {
         match self {
-            // Go opens the circuit on any error without a status, a body it
-            // could not rewrite included. Serve has already parsed the body
-            // as a JSON object, so that case does not arise there.
-            Self::NoBackend | Self::Body(_) | Self::Transport(_) | Self::Timeout { .. } => {
-                Fault::Backend
-            }
+            Self::NoBackend | Self::Transport(_) | Self::Timeout { .. } => Fault::Backend,
+            // Go opened the circuit here too. A body that cannot be rewritten
+            // is the client's, so it fails only that request.
+            Self::Body(_) => Fault::Request,
             Self::Status(status) => match *status {
                 StatusCode::UNAUTHORIZED
                 | StatusCode::PAYMENT_REQUIRED
