@@ -81,18 +81,37 @@ struct Record {
     server: Arc<Inner>,
     start: Timestamp,
     ev: Event,
+    waiting: Waiting,
+}
+
+/// What the handler is awaiting and since when, so a client that leaves mid-wait is recorded
+/// as Go recorded it: the call it cancelled counts as failed, with the time it ran.
+#[derive(Clone, Copy)]
+enum Waiting {
+    Nothing,
+    Hop(Timestamp),
+    Upstream(Timestamp),
+    Overflow(Timestamp),
 }
 
 impl Drop for Record {
     fn drop(&mut self) {
-        self.ev.total = self
-            .server
-            .opt
-            .clock
-            .now()
-            .saturating_duration_since(self.start);
+        let now = self.server.opt.clock.now();
+        self.ev.total = now.saturating_duration_since(self.start);
         if self.ev.status.is_none() {
             self.ev.reason = Some(Reason::ClientGone);
+            match self.waiting {
+                Waiting::Nothing => {}
+                Waiting::Hop(t) => {
+                    self.ev.hop = Some(hop::Outcome::Failed);
+                    self.ev.hop_time = now.saturating_duration_since(t);
+                }
+                Waiting::Upstream(t) => self.ev.upstream = now.saturating_duration_since(t),
+                Waiting::Overflow(t) => {
+                    self.ev.overflow = Some(overflow::Outcome::Failed);
+                    self.ev.overflow_time = now.saturating_duration_since(t);
+                }
+            }
         }
         self.server.finish(&self.ev);
     }
@@ -133,6 +152,7 @@ pub(super) async fn chat(s: Arc<Inner>, req: Request) -> Response {
         server: Arc::clone(&s),
         start,
         ev: event_for(&h),
+        waiting: Waiting::Nothing,
     };
 
     let Some(body) = read_body(body, s.opt.max_body.saturating_add(1)).await else {
@@ -170,7 +190,7 @@ pub(super) async fn chat(s: Arc<Inner>, req: Request) -> Response {
             let Err(refusal) = d.placement.result else {
                 return response(StatusCode::INTERNAL_SERVER_ERROR, Body::empty());
             };
-            refused(&s, &call, &refusal, body, &mut rec.ev).await
+            refused(&s, &call, &refusal, body, &mut rec).await
         }
         Admission::Admitted(d, ticket) => {
             admitted(&s, &call, &d, ticket, &parts.headers, body, &mut rec).await
@@ -199,13 +219,14 @@ async fn refused(
     call: &Call,
     refusal: &Refusal,
     body: Bytes,
-    ev: &mut Event,
+    rec: &mut Record,
 ) -> Response {
     if !refusal.stays()
-        && let Some(served) = leave(s, call, refusal, body, ev).await
+        && let Some(served) = leave(s, call, refusal, body, rec).await
     {
         return served;
     }
+    let ev = &mut rec.ev;
     ev.status = Some(refusal.code());
     ev.reason = Some(Reason::Shed(refusal.reason));
     refusal_response(refusal)
@@ -219,8 +240,9 @@ async fn leave(
     call: &Call,
     refusal: &Refusal,
     body: Bytes,
-    ev: &mut Event,
+    rec: &mut Record,
 ) -> Option<Response> {
+    let ev = &mut rec.ev;
     let Some(permit) = may_leave(call, refusal) else {
         ev.overflow = Some(overflow::Outcome::Blocked);
         return None;
@@ -234,7 +256,10 @@ async fn leave(
         return None;
     };
     let body_bytes = body.len();
+    rec.waiting = Waiting::Overflow(s.opt.clock.now());
     let attempt = ov.send(permit, body).await;
+    rec.waiting = Waiting::Nothing;
+    let ev = &mut rec.ev;
     ev.overflow = Some(attempt.outcome());
     ev.overflow_time = attempt.took();
     match attempt {
@@ -312,7 +337,9 @@ async fn admitted(
                 to: &pod,
                 history: d.history,
             };
+            rec.waiting = Waiting::Hop(s.opt.clock.now());
             let (out, report) = hopper.move_kv(&m, body.clone()).await;
+            rec.waiting = Waiting::Nothing;
             rec.ev.hop = report.outcome();
             rec.ev.hop_time = report.took();
             if let Report::Failed { err, .. } = &report {
@@ -331,6 +358,7 @@ async fn admitted(
         None => body.clone(),
     };
 
+    rec.waiting = Waiting::Upstream(s.opt.clock.now());
     let up = match (&s.opt.hop, rec.ev.hop) {
         (Some(hopper), Some(hop::Outcome::Hopped)) => {
             let delivery = HopDelivery {
@@ -346,6 +374,7 @@ async fn admitted(
         }
         _ => forward(s, base, marked, fwd_headers, deadline).await,
     };
+    rec.waiting = Waiting::Nothing;
     rec.ev.upstream = up.took;
 
     let answer = match up.result {
