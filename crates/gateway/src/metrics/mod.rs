@@ -454,9 +454,21 @@ impl Metrics {
             (u.prompt_tokens, u.cached_tokens, u.completion_tokens)
         });
         let shared = self.0.shared_prefix_tokens;
-        add(&mut c.prompt_tokens, [pod, "shared_hit"], cached.min(shared));
-        add(&mut c.prompt_tokens, [pod, "run_hit"], cached.saturating_sub(shared));
-        add(&mut c.prompt_tokens, [pod, "miss"], prompt.saturating_sub(cached));
+        add(
+            &mut c.prompt_tokens,
+            [pod, "shared_hit"],
+            cached.min(shared),
+        );
+        add(
+            &mut c.prompt_tokens,
+            [pod, "run_hit"],
+            cached.saturating_sub(shared),
+        );
+        add(
+            &mut c.prompt_tokens,
+            [pod, "miss"],
+            prompt.saturating_sub(cached),
+        );
         add(&mut c.completion_tokens, [pod], completion);
     }
 

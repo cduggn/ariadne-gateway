@@ -67,14 +67,15 @@ struct Family {
 pub(super) struct Exposition(BTreeMap<&'static str, Family>);
 
 impl Exposition {
-    pub(super) fn sample<const N: usize>(
-        &mut self,
-        spec: &Spec<N>,
-        values: [&str; N],
-        value: f64,
-    ) {
+    pub(super) fn sample<const N: usize>(&mut self, spec: &Spec<N>, values: [&str; N], value: f64) {
         let (lines, labels) = self.series(spec, values);
-        let _ = writeln!(lines, "{}{} {}", spec.name, braces(&labels), go_float(value));
+        let _ = writeln!(
+            lines,
+            "{}{} {}",
+            spec.name,
+            braces(&labels),
+            go_float(value)
+        );
     }
 
     pub(super) fn histogram<const N: usize>(
@@ -100,7 +101,13 @@ impl Exposition {
             "{}_bucket{{{labels}{sep}le=\"+Inf\"}} {}",
             spec.name, h.count
         );
-        let _ = writeln!(lines, "{}_sum{} {}", spec.name, braces(&labels), go_float(h.sum));
+        let _ = writeln!(
+            lines,
+            "{}_sum{} {}",
+            spec.name,
+            braces(&labels),
+            go_float(h.sum)
+        );
         let _ = writeln!(lines, "{}_count{} {}", spec.name, braces(&labels), h.count);
     }
 

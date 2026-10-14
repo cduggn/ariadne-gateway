@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ariadne_decide::{
-    DataClass, PickPolicy, Priority, Reason as ShedReason, RejectReason, Request, RunId,
-    RunUsage, Sticky, Timestamp,
+    DataClass, PickPolicy, Priority, Reason as ShedReason, RejectReason, Request, RunId, RunUsage,
+    Sticky, Timestamp,
 };
 use bytes::Bytes;
 
@@ -99,7 +99,10 @@ fn want_lines(body: &str, lines: &[&str]) {
         }
         let family = want.split(['{', ' ']).next().unwrap_or(want);
         let near: Vec<&str> = body.lines().filter(|l| l.starts_with(family)).collect();
-        missing.push(format!("missing {want:?}\nfamily has:\n{}", near.join("\n")));
+        missing.push(format!(
+            "missing {want:?}\nfamily has:\n{}",
+            near.join("\n")
+        ));
     }
     assert!(missing.is_empty(), "{}", missing.join("\n"));
 }
@@ -479,7 +482,10 @@ fn orch_names(expr: &str) -> Vec<&str> {
 
 #[tokio::test]
 async fn dashboard_reads_only_metrics_the_gateway_exports() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../deploy/dashboards/gateway.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../deploy/dashboards/gateway.json"
+    );
     let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let dash: serde_json::Value =
         serde_json::from_str(&raw).unwrap_or_else(|e| panic!("gateway.json is not JSON: {e}"));
