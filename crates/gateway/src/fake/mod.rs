@@ -1,6 +1,7 @@
 //! In-process fakes of the gateway's upstreams, for tests and the laptop demo.
 
 pub mod overflow;
+pub mod vllm;
 
 use std::io;
 use std::net::SocketAddr;
