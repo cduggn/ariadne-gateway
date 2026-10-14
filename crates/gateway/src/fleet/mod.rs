@@ -1,9 +1,14 @@
 //! The gateway's stateful side. `Queue` is the per-worker in-flight cap and the two-lane wait list
 //! behind it, the only step of the pipeline that waits.
 
+mod gate;
 mod queue;
 pub mod scrape;
 
+pub use gate::{
+    Admission, Config, Decision, Gate, OffboxTicket, Outcome, SHARED_TENANT, Scrape, TenantLimit,
+    Ticket,
+};
 pub use queue::{Depth, Queue, QueueRefusal, Slot};
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
