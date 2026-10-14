@@ -1,3 +1,4 @@
+pub mod clock;
 pub mod fake;
 pub mod fleet;
 pub mod goduration;
