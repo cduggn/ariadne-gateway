@@ -9,6 +9,19 @@ use std::fmt;
 /// gateway's memory through the scrape path.
 pub const MAX_METRICS_BYTES: usize = 8 << 20;
 
+/// Caps the labels on one sample line. vLLM sends about ten, and the
+/// duplicate-label check is quadratic in this number.
+pub const MAX_LABELS_PER_SAMPLE: usize = 64;
+
+/// The families `parse_metrics` reads. Only these keep their points and
+/// buckets; every other family is validated and then forgotten.
+const READ: [&str; 5] = [KV_USAGE, KV_USAGE_LEGACY, WAITING, CACHE_CONFIG, TTFT];
+const KV_USAGE: &str = "vllm:kv_cache_usage_perc";
+const KV_USAGE_LEGACY: &str = "vllm:gpu_cache_usage_perc";
+const WAITING: &str = "vllm:num_requests_waiting";
+const CACHE_CONFIG: &str = "vllm:cache_config_info";
+const TTFT: &str = "vllm:time_to_first_token_seconds";
+
 /// One cumulative histogram bucket: the observations at or under `le`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bucket {
@@ -23,15 +36,17 @@ pub struct Histogram {
     pub buckets: Vec<Bucket>,
 }
 
-/// One worker's /metrics body reduced to what the Gate needs. `kv_usage` is
-/// a 0 to 1 ratio, and `None` when the body carried no KV usage metric,
-/// because without it the sample says nothing about the worker's load.
-/// `kv_pool_tokens` is the KV pool's capacity in tokens, or 0 when vLLM did
-/// not export its cache config.
+/// One worker's /metrics body reduced to what the Gate needs, with every
+/// number already checked, so the admission decision can trust it.
+/// `kv_usage` is a ratio in 0..=1, and `None` when the body carried no KV
+/// usage metric, because without it the sample says nothing about the
+/// worker's load. `kv_pool_tokens` is the KV pool's capacity in tokens, or 0
+/// when vLLM did not export its cache config. `waiting` is finite and not
+/// negative, and every TTFT bucket has a real bound and a finite count.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sample {
     pub kv_usage: Option<f64>,
-    pub kv_pool_tokens: i64,
+    pub kv_pool_tokens: u64,
     pub waiting: f64,
     pub ttft: Histogram,
 }
@@ -59,33 +74,43 @@ impl std::error::Error for ParseError {}
 /// `MAX_METRICS_BYTES`. It sums gauges across label sets, and histogram
 /// buckets with the same bound. KV usage is normalised per label set,
 /// because older vLLM releases exported it as a percentage.
+///
+/// The numbers come from the worker and are not trusted. A KV usage that is
+/// not finite reads as a full cache, so garbage fails closed, and a finite
+/// one is clamped to 0..=1. A waiting count that is not finite or negative
+/// reads as 0. A pool label that is negative or not a number counts as 0.
 pub fn parse_metrics(body: &[u8]) -> Result<Sample, ParseError> {
     let families = Families::parse(&body[..body.len().min(MAX_METRICS_BYTES)])?;
 
     let mut sample = Sample::default();
-    if let Some(family) = families.first(&["vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"])
-    {
-        sample.kv_usage = Some(
-            family
-                .points
-                .iter()
-                .fold(0.0, |sum, p| sum + ratio(p.value)),
-        );
+    if let Some(family) = families.first(&[KV_USAGE, KV_USAGE_LEGACY]) {
+        let usage = family
+            .points
+            .iter()
+            .fold(0.0, |sum, p| sum + ratio(p.value));
+        sample.kv_usage = Some(if usage.is_finite() {
+            usage.clamp(0.0, 1.0)
+        } else {
+            1.0
+        });
     }
-    if let Some(family) = families.first(&["vllm:num_requests_waiting"]) {
-        sample.waiting = family.points.iter().fold(0.0, |sum, p| sum + p.value);
+    if let Some(family) = families.first(&[WAITING]) {
+        let waiting = family.points.iter().fold(0.0, |sum, p| sum + p.value);
+        sample.waiting = if waiting.is_finite() && waiting > 0.0 {
+            waiting
+        } else {
+            0.0
+        };
     }
-    if let Some(family) = families.first(&["vllm:cache_config_info"]) {
-        // Go's int arithmetic wraps, and a label a worker sends must not be
-        // able to panic the gateway.
-        sample.kv_pool_tokens = family.points.iter().fold(0i64, |sum, p| {
-            sum.wrapping_add(
-                p.label_int("num_gpu_blocks")
-                    .wrapping_mul(p.label_int("block_size")),
+    if let Some(family) = families.first(&[CACHE_CONFIG]) {
+        sample.kv_pool_tokens = family.points.iter().fold(0u64, |sum, p| {
+            sum.saturating_add(
+                p.label_u64("num_gpu_blocks")
+                    .saturating_mul(p.label_u64("block_size")),
             )
         });
     }
-    if let Some(family) = families.first(&["vllm:time_to_first_token_seconds"]) {
+    if let Some(family) = families.first(&[TTFT]) {
         sample.ttft = histogram(&family.buckets);
     }
     Ok(sample)
@@ -187,8 +212,9 @@ struct Point {
 }
 
 impl Point {
-    /// Reads an integer label, or 0 when it is missing or not a number.
-    fn label_int(&self, name: &str) -> i64 {
+    /// Reads a count label, or 0 when it is missing, negative or not a
+    /// number.
+    fn label_u64(&self, name: &str) -> u64 {
         self.labels
             .iter()
             .find(|(n, _)| n == name)
@@ -198,10 +224,12 @@ impl Point {
 }
 
 /// One metric family. `points` holds the lines of a scalar family and
-/// `buckets` the bucket lines of a histogram. A summary or histogram keeps
-/// no points, so it reads as zero where a scalar was expected.
+/// `buckets` the bucket lines of a histogram, both only when `kept`. A
+/// summary or histogram keeps no points, so it reads as zero where a scalar
+/// was expected.
 #[derive(Default)]
 struct Family {
+    kept: bool,
     kind: Option<Kind>,
     has_help: bool,
     sampled: bool,
@@ -284,7 +312,10 @@ impl Families {
         if let Some(i) = declared(count.or(sum).or(bucket), Kind::Histogram) {
             return (i, series);
         }
-        self.all.push(Family::default());
+        self.all.push(Family {
+            kept: READ.contains(&name),
+            ..Family::default()
+        });
         self.by_name.insert(name.to_owned(), self.all.len() - 1);
         (self.all.len() - 1, Series::Plain)
     }
@@ -363,13 +394,20 @@ impl Families {
         let kind = *self.all[i].kind.get_or_insert(Kind::Untyped);
         c.skip_blanks();
 
-        let mut labels: Vec<(String, String)> = Vec::new();
+        let mut labels: Vec<(&str, String)> = Vec::new();
         let mut le = None;
         if c.cur() == b'{' {
+            let mut seen = 0;
             loop {
                 c.advance_past_blanks();
                 if c.cur() == b'}' {
                     break;
+                }
+                seen += 1;
+                if seen > MAX_LABELS_PER_SAMPLE {
+                    return Err(format!(
+                        "more than {MAX_LABELS_PER_SAMPLE} labels for metric {name:?}"
+                    ));
                 }
                 let label = c.name(is_label_name_byte)?;
                 if label.is_empty() {
@@ -391,7 +429,7 @@ impl Families {
                     (kind, label),
                     (Kind::Summary, "quantile") | (Kind::Histogram, "le")
                 );
-                if !series_label && labels.iter().any(|(n, _)| n == label) {
+                if !series_label && labels.iter().any(|(n, _)| *n == label) {
                     return Err(format!("duplicate label names for metric {name:?}"));
                 }
                 c.advance_past_blanks();
@@ -417,7 +455,7 @@ impl Families {
                     _ => return Err(format!("unexpected end of label value {value:?}")),
                 };
                 if !series_label {
-                    labels.push((label.to_owned(), value));
+                    labels.push((label, value));
                 }
                 if last {
                     break;
@@ -441,7 +479,13 @@ impl Families {
         family.sampled = true;
         match (kind, series) {
             (Kind::Counter | Kind::Gauge | Kind::Untyped, _) => {
-                family.points.push(Point { labels, value });
+                if family.kept {
+                    let labels = labels.into_iter().map(|(n, v)| (n.to_owned(), v));
+                    family.points.push(Point {
+                        labels: labels.collect(),
+                        value,
+                    });
+                }
             }
             (Kind::Summary, _) | (Kind::Histogram, Series::Sum) => {}
             (Kind::Histogram, Series::Count) => {
@@ -455,7 +499,10 @@ impl Families {
                     if value < 0.0 {
                         return Err(format!("negative bucket population for histogram {name:?}"));
                     }
-                    family.buckets.push(Bucket { le, count: value });
+                    // An infinite or NaN count would poison every quantile.
+                    if family.kept && value.is_finite() {
+                        family.buckets.push(Bucket { le, count: value });
+                    }
                 }
             }
         }
@@ -752,6 +799,97 @@ vllm:time_to_first_token_seconds_bucket{engine="1",le="+Inf"} 7.0
         assert_eq!(
             err.to_string(),
             "parse metrics: text format parsing error in line 1: unexpected end of label value \"0\""
+        );
+    }
+
+    #[test]
+    fn parse_metrics_fails_closed_on_garbage_numbers() {
+        let usage = |v: &str| {
+            must_parse(&format!(
+                "# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc{{engine=\"0\"}} {v}\n"
+            ))
+            .kv_usage
+        };
+        for (v, want) in [
+            ("-0.5", 0.0),
+            ("NaN", 1.0),
+            ("+Inf", 1.0),
+            ("-Inf", 1.0),
+            ("250", 1.0),
+            ("0.5", 0.5),
+        ] {
+            assert_eq!(usage(v), Some(want), "kv_usage from {v}");
+        }
+
+        let waiting = |v: &str| {
+            must_parse(&format!(
+                "# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting 1\nvllm:num_requests_waiting{{e=\"1\"}} {v}\n"
+            ))
+            .waiting
+        };
+        for (v, want) in [("-5", 0.0), ("NaN", 0.0), ("+Inf", 0.0), ("2", 3.0)] {
+            assert_eq!(waiting(v), want, "waiting from 1 + {v}");
+        }
+
+        let pool = |blocks: &str, size: &str| {
+            must_parse(&format!(
+                "vllm:cache_config_info{{num_gpu_blocks=\"{blocks}\",block_size=\"{size}\"}} 1\nvllm:cache_config_info{{num_gpu_blocks=\"2\",block_size=\"16\"}} 1\n"
+            ))
+            .kv_pool_tokens
+        };
+        assert_eq!(pool("-4941", "16"), 32, "negative blocks count as 0");
+        assert_eq!(pool("x", "16"), 32, "non-numeric blocks count as 0");
+        assert_eq!(
+            pool("18446744073709551615", "16"),
+            u64::MAX,
+            "an overflowing product saturates"
+        );
+    }
+
+    #[test]
+    fn parse_metrics_drops_buckets_with_bad_counts() {
+        let s = must_parse(
+            r#"# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_bucket{le="0.5"} NaN
+vllm:time_to_first_token_seconds_bucket{le="1"} +Inf
+vllm:time_to_first_token_seconds_bucket{le="NaN"} 3
+vllm:time_to_first_token_seconds_bucket{le="+Inf"} 4
+"#,
+        );
+        assert_eq!(s.ttft, hist(&[f64::INFINITY], &[4.0]));
+    }
+
+    #[test]
+    fn parse_metrics_refuses_too_many_labels() {
+        let line = |n: usize| {
+            let labels: Vec<String> = (0..n).map(|i| format!("l{i}=\"v\"")).collect();
+            format!("other_metric{{{}}} 1\n", labels.join(","))
+        };
+        assert!(parse_metrics(line(MAX_LABELS_PER_SAMPLE).as_bytes()).is_ok());
+        let err = parse_metrics(line(MAX_LABELS_PER_SAMPLE + 1).as_bytes())
+            .expect_err("want a parse error");
+        assert_eq!(
+            err.to_string(),
+            "parse metrics: text format parsing error in line 1: more than 64 labels for metric \"other_metric\""
+        );
+    }
+
+    #[test]
+    fn parse_metrics_keeps_validating_unread_families() {
+        let err = parse_metrics(b"other{a=\"1\",a=\"2\"} 1\n").expect_err("duplicate label");
+        assert_eq!(
+            err.to_string(),
+            "parse metrics: text format parsing error in line 1: duplicate label names for metric \"other\""
+        );
+        let families = Families::parse(VLLM_METRICS.as_bytes()).expect("parse");
+        let stored: usize = families
+            .all
+            .iter()
+            .map(|f| f.points.len() + f.buckets.len())
+            .sum();
+        assert_eq!(
+            stored, 9,
+            "points of the four read families and the six TTFT buckets"
         );
     }
 
